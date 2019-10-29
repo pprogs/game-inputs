@@ -1,132 +1,172 @@
-'use strict'
+"use strict";
 
-var vkey = require('vkey')
-var EventEmitter = require('events').EventEmitter
+var vkey = require("vkey");
+var EventEmitter = require("events").EventEmitter;
 // mousewheel polyfill borrowed directly from game-shell
-var addMouseWheel = require("./lib/mousewheel-polyfill.js")
+var addMouseWheel = require("./lib/mousewheel-polyfill.js");
 
-module.exports = function (domElement, options) {
-    return new Inputs(domElement, options)
-}
-
+module.exports = function(domElement, options) {
+    return new Inputs(domElement, options);
+};
 
 /*
  *   Simple inputs manager to abstract key/mouse inputs.
- *        Inspired by (and where applicable stealing code from) 
+ *        Inspired by (and where applicable stealing code from)
  *        game-shell: https://github.com/mikolalysenko/game-shell
- *  
+ *
  *  inputs.bind( 'move-right', 'D', '<right>' )
  *  inputs.bind( 'move-left',  'A' )
  *  inputs.unbind( 'move-left' )
- *  
+ *
  *  inputs.down.on( 'move-right',  function( binding, event ) {})
  *  inputs.up.on(   'move-right',  function( binding, event ) {})
  *
  *  inputs.state['move-right']  // true when corresponding keys are down
  *  inputs.state.dx             // mouse x movement since tick() was last called
  *  inputs.getBindings()        // [ 'move-right', 'move-left', ... ]
-*/
-
+ */
 
 function Inputs(element, opts) {
-
     // settings
-    this.element = element || document
-    opts = opts || {}
-    this.preventDefaults = !!opts.preventDefaults
-    this.stopPropagation = !!opts.stopPropagation
+    this.element = element || document;
+    opts = opts || {};
+    this.preventDefaults = !!opts.preventDefaults;
+    this.stopPropagation = !!opts.stopPropagation;
 
     // emitters
-    this.down = new EventEmitter()
-    this.up = new EventEmitter()
+    this.down = new EventEmitter();
+    this.up = new EventEmitter();
 
     // state object to be queried
     this.state = {
-        dx: 0, dy: 0,
-        scrollx: 0, scrolly: 0, scrollz: 0
-    }
+        dx: 0,
+        dy: 0,
+        scrollx: 0,
+        scrolly: 0,
+        scrollz: 0,
+        lastx: undefined,
+        lasty: undefined
+    };
 
     // internal state
-    this._keybindmap = {}       // { 'vkeycode' : [ 'binding', 'binding2' ] }
-    this._keyStates = {}        // { 'vkeycode' : boolean }
-    this._bindPressCounts = {}  // { 'binding' : int }
+    this._keybindmap = {}; // { 'vkeycode' : [ 'binding', 'binding2' ] }
+    this._keyStates = {}; // { 'vkeycode' : boolean }
+    this._bindPressCounts = {}; // { 'binding' : int }
 
     // needed to work around a bug in Mac Chrome 75
     // https://bugs.chromium.org/p/chromium/issues/detail?id=977093
-    this._ignoreMousemoveOnce = false
+    this._ignoreMousemoveOnce = false;
 
     // register for dom events
-    this.initEvents()
+    this.initEvents();
 }
-
 
 /*
  *
- *   PUBLIC API 
+ *   PUBLIC API
  *
-*/
+ */
 
-Inputs.prototype.initEvents = function () {
+Inputs.prototype.initEvents = function() {
     // keys
-    window.addEventListener('keydown', onKeyEvent.bind(undefined, this, true), false)
-    window.addEventListener('keyup', onKeyEvent.bind(undefined, this, false), false)
+    window.addEventListener(
+        "keydown",
+        onKeyEvent.bind(undefined, this, true),
+        false
+    );
+    window.addEventListener(
+        "keyup",
+        onKeyEvent.bind(undefined, this, false),
+        false
+    );
     // mouse buttons
-    this.element.addEventListener("mousedown", onMouseEvent.bind(undefined, this, true), false)
-    this.element.addEventListener("mouseup", onMouseEvent.bind(undefined, this, false), false)
-    this.element.oncontextmenu = onContextMenu.bind(undefined, this)
+    this.element.addEventListener(
+        "mousedown",
+        onMouseEvent.bind(undefined, this, true),
+        false
+    );
+    this.element.addEventListener(
+        "mouseup",
+        onMouseEvent.bind(undefined, this, false),
+        false
+    );
+    this.element.oncontextmenu = onContextMenu.bind(undefined, this);
     // treat dragstart like mouseup - idiotically, mouseup doesn't fire after a drag starts (!)
-    this.element.addEventListener("dragstart", onMouseEvent.bind(undefined, this, false), false)
+    this.element.addEventListener(
+        "dragstart",
+        onMouseEvent.bind(undefined, this, false),
+        false
+    );
     // touch/mouse movement
-    this.element.addEventListener("mousemove", onMouseMove.bind(undefined, this), false)
-    this.element.addEventListener("touchmove", onMouseMove.bind(undefined, this), false)
-    this.element.addEventListener("touchstart", onTouchStart.bind(undefined, this), false)
+    this.element.addEventListener(
+        "mousemove",
+        onMouseMove.bind(undefined, this),
+        false
+    );
+    this.element.addEventListener(
+        "touchmove",
+        onMouseMove.bind(undefined, this),
+        false
+    );
+    this.element.addEventListener(
+        "touchstart",
+        onTouchStart.bind(undefined, this),
+        false
+    );
     // scroll/mousewheel
-    addMouseWheel(this.element, onMouseWheel.bind(undefined, this), false)
+    addMouseWheel(this.element, onMouseWheel.bind(undefined, this), false);
     // temp bug workaround, see above
-    document.addEventListener("pointerlockchange", onLockChange.bind(undefined, this), false)
-    document.addEventListener("mozpointerlockchange", onLockChange.bind(undefined, this), false)
-}
-
+    document.addEventListener(
+        "pointerlockchange",
+        onLockChange.bind(undefined, this),
+        false
+    );
+    document.addEventListener(
+        "mozpointerlockchange",
+        onLockChange.bind(undefined, this),
+        false
+    );
+};
 
 // Usage:  bind( bindingName, vkeyCode, vkeyCode.. )
 //    Note that inputs._keybindmap maps vkey codes to binding names
 //    e.g. this._keybindmap['a'] = 'move-left'
-Inputs.prototype.bind = function (binding) {
+Inputs.prototype.bind = function(binding) {
     for (var i = 1; i < arguments.length; ++i) {
-        var vkeyCode = arguments[i]
-        var arr = this._keybindmap[vkeyCode] || []
+        var vkeyCode = arguments[i];
+        var arr = this._keybindmap[vkeyCode] || [];
         if (arr.indexOf(binding) == -1) {
-            arr.push(binding)
+            arr.push(binding);
         }
-        this._keybindmap[vkeyCode] = arr
+        this._keybindmap[vkeyCode] = arr;
     }
-    this.state[binding] = !!this.state[binding]
-}
+    this.state[binding] = !!this.state[binding];
+};
 
 // search out and remove all keycodes bound to a given binding
-Inputs.prototype.unbind = function (binding) {
+Inputs.prototype.unbind = function(binding) {
     for (var b in this._keybindmap) {
-        var arr = this._keybindmap[b]
-        var i = arr.indexOf(binding)
-        if (i > -1) { arr.splice(i, 1) }
+        var arr = this._keybindmap[b];
+        var i = arr.indexOf(binding);
+        if (i > -1) {
+            arr.splice(i, 1);
+        }
     }
-}
+};
 
 // tick function - clears out cumulative mouse movement state variables
-Inputs.prototype.tick = function () {
-    this.state.dx = this.state.dy = 0
-    this.state.scrollx = this.state.scrolly = this.state.scrollz = 0
-}
+Inputs.prototype.tick = function() {
+    this.state.dx = this.state.dy = 0;
+    this.state.scrollx = this.state.scrolly = this.state.scrollz = 0;
+};
 
-
-
-Inputs.prototype.getBoundKeys = function () {
-    var arr = []
-    for (var b in this._keybindmap) { arr.push(b) }
-    return arr
-}
-
-
+Inputs.prototype.getBoundKeys = function() {
+    var arr = [];
+    for (var b in this._keybindmap) {
+        arr.push(b);
+    }
+    return arr;
+};
 
 /*
  *
@@ -134,98 +174,114 @@ Inputs.prototype.getBoundKeys = function () {
  *      INTERNALS - DOM EVENT HANDLERS
  *
  *
-*/
-
+ */
 
 function onKeyEvent(inputs, wasDown, ev) {
-    handleKeyEvent(ev.keyCode, vkey[ev.keyCode], wasDown, inputs, ev)
+    handleKeyEvent(ev.keyCode, vkey[ev.keyCode], wasDown, inputs, ev);
 }
 
 function onMouseEvent(inputs, wasDown, ev) {
     // simulate a code out of range of vkey
-    var keycode = -1 - ev.button
-    var vkeycode = '<mouse ' + (ev.button + 1) + '>'
-    handleKeyEvent(keycode, vkeycode, wasDown, inputs, ev)
-    return false
+    var keycode = -1 - ev.button;
+    var vkeycode = "<mouse " + (ev.button + 1) + ">";
+    handleKeyEvent(keycode, vkeycode, wasDown, inputs, ev);
+    return false;
 }
 
 function onContextMenu(inputs) {
     // cancel context menu if there's a binding for right mousebutton
-    var arr = inputs._keybindmap['<mouse 3>']
-    if (arr) { return false }
+    var arr = inputs._keybindmap["<mouse 3>"];
+    if (arr) {
+        return false;
+    }
 }
 
 function onMouseMove(inputs, ev) {
     // bug workaround, see top of file
     if (inputs._ignoreMousemoveOnce) {
-        inputs._ignoreMousemoveOnce = false
-        return
+        inputs._ignoreMousemoveOnce = false;
+        return;
     }
     // for now, just populate the state object with mouse movement
     var dx = ev.movementX || ev.mozMovementX || 0,
-        dy = ev.movementY || ev.mozMovementY || 0
+        dy = ev.movementY || ev.mozMovementY || 0;
+
     // ad-hoc experimental touch support
     if (ev.touches && (dx | dy) === 0) {
-        var xy = getTouchMovement(ev)
-        dx = xy[0]
-        dy = xy[1]
+        var xy = getTouchMovement(ev);
+        dx = xy[0];
+        dy = xy[1];
+
+        inputs.state.lastx = xy[2];
+        inputs.state.lasty = xy[3];
+    } else {
+        inputs.state.lastx = ev.clientX;
+        inputs.state.lasty = ev.clientY;
     }
-    inputs.state.dx += dx
-    inputs.state.dy += dy
+    inputs.state.dx += dx;
+    inputs.state.dy += dy;
 }
 
 // experimental - for touch events, extract useful dx/dy
-var lastTouchX = 0
-var lastTouchY = 0
-var lastTouchID = null
+var lastTouchX = 0;
+var lastTouchY = 0;
+var lastTouchID = null;
 
 function onTouchStart(inputs, ev) {
-    var touch = ev.changedTouches[0]
-    lastTouchX = touch.clientX
-    lastTouchY = touch.clientY
-    lastTouchID = touch.identifier
+    var touch = ev.changedTouches[0];
+    lastTouchX = touch.clientX;
+    lastTouchY = touch.clientY;
+    lastTouchID = touch.identifier;
+
+    inputs.state.lastx = touch.clientX;
+    inputs.state.lasty = touch.clientY;
 }
 
 function getTouchMovement(ev) {
-    var touch
-    var touches = ev.changedTouches
+    var touch;
+    var touches = ev.changedTouches;
     for (var i = 0; i < touches.length; ++i) {
-        if (touches[i].identifier == lastTouchID) touch = touches[i]
+        if (touches[i].identifier == lastTouchID) touch = touches[i];
     }
-    if (!touch) return [0, 0]
-    var res = [touch.clientX - lastTouchX, touch.clientY - lastTouchY]
-    lastTouchX = touch.clientX
-    lastTouchY = touch.clientY
-    return res
+    if (!touch) return [0, 0, undefined, undefined];
+    var res = [
+        touch.clientX - lastTouchX,
+        touch.clientY - lastTouchY,
+        touch.clientX,
+        touch.clientY
+    ];
+    lastTouchX = touch.clientX;
+    lastTouchY = touch.clientY;
+    return res;
 }
 
 function onMouseWheel(inputs, ev) {
     // basically borrowed from game-shell
-    var scale = 1
+    var scale = 1;
     switch (ev.deltaMode) {
-        case 0: scale = 1; break  // Pixel
-        case 1: scale = 12; break  // Line
-        case 2:  // page
+        case 0:
+            scale = 1;
+            break; // Pixel
+        case 1:
+            scale = 12;
+            break; // Line
+        case 2: // page
             // TODO: investigagte when this happens, what correct handling is
-            scale = inputs.element.clientHeight || window.innerHeight
-            break
+            scale = inputs.element.clientHeight || window.innerHeight;
+            break;
     }
     // accumulate state
-    inputs.state.scrollx += ev.deltaX * scale
-    inputs.state.scrolly += ev.deltaY * scale
-    inputs.state.scrollz += (ev.deltaZ * scale) || 0
-    return false
+    inputs.state.scrollx += ev.deltaX * scale;
+    inputs.state.scrolly += ev.deltaY * scale;
+    inputs.state.scrollz += ev.deltaZ * scale || 0;
+    return false;
 }
 
 function onLockChange(inputs, ev) {
-    var locked = document.pointerLockElement
-        || document.mozPointerLockElement
-        || null
-    if (locked) inputs._ignoreMousemoveOnce = true
+    var locked =
+        document.pointerLockElement || document.mozPointerLockElement || null;
+    if (locked) inputs._ignoreMousemoveOnce = true;
 }
-
-
-
 
 /*
  *
@@ -233,47 +289,46 @@ function onLockChange(inputs, ev) {
  *   KEY BIND HANDLING
  *
  *
-*/
-
+ */
 
 function handleKeyEvent(keycode, vcode, wasDown, inputs, ev) {
-    var arr = inputs._keybindmap[vcode]
+    var arr = inputs._keybindmap[vcode];
     // don't prevent defaults if there's no binding
-    if (!arr) { return }
-    if (inputs.preventDefaults) ev.preventDefault()
-    if (inputs.stopPropagation) ev.stopPropagation()
+    if (!arr) {
+        return;
+    }
+    if (inputs.preventDefaults) ev.preventDefault();
+    if (inputs.stopPropagation) ev.stopPropagation();
 
     // if the key's state has changed, handle an event for all bindings
-    var currstate = inputs._keyStates[keycode]
+    var currstate = inputs._keyStates[keycode];
     if (XOR(currstate, wasDown)) {
         // for each binding: emit an event, and update cached state information
         for (var i = 0; i < arr.length; ++i) {
-            handleBindingEvent(arr[i], wasDown, inputs, ev)
+            handleBindingEvent(arr[i], wasDown, inputs, ev);
         }
     }
-    inputs._keyStates[keycode] = wasDown
+    inputs._keyStates[keycode] = wasDown;
 }
-
 
 function handleBindingEvent(binding, wasDown, inputs, ev) {
     // keep count of presses mapped by binding
     // (to handle two keys with the same binding pressed at once)
-    var ct = inputs._bindPressCounts[binding] || 0
-    ct += wasDown ? 1 : -1
-    if (ct < 0) { ct = 0 } // shouldn't happen
-    inputs._bindPressCounts[binding] = ct
+    var ct = inputs._bindPressCounts[binding] || 0;
+    ct += wasDown ? 1 : -1;
+    if (ct < 0) {
+        ct = 0;
+    } // shouldn't happen
+    inputs._bindPressCounts[binding] = ct;
 
     // emit event if binding's state has changed
-    var currstate = inputs.state[binding]
+    var currstate = inputs.state[binding];
     if (XOR(currstate, ct)) {
-        var emitter = wasDown ? inputs.down : inputs.up
-        emitter.emit(binding, ev)
+        var emitter = wasDown ? inputs.down : inputs.up;
+        emitter.emit(binding, ev);
     }
-    inputs.state[binding] = !!ct
+    inputs.state[binding] = !!ct;
 }
-
-
-
 
 /*
  *
@@ -281,14 +336,9 @@ function handleBindingEvent(binding, wasDown, inputs, ev) {
  *    HELPERS
  *
  *
-*/
-
+ */
 
 // how is this not part of Javascript?
 function XOR(a, b) {
-    return a ? !b : b
+    return a ? !b : b;
 }
-
-
-
-
